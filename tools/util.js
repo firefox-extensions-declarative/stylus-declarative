@@ -10,7 +10,7 @@ const SRC = ROOT + 'src/';
 const [TARGET, ZIP] = process.env.NODE_ENV?.split(':') || [''];
 const [BUILD, FLAVOR = 'mv2'] = TARGET.split('-');
 const MV3 = FLAVOR === 'mv3';
-const DEV = process.env.npm_lifecycle_event?.startsWith('watch');
+const DEV = true; // process.env.npm_lifecycle_event?.startsWith('watch');
 
 const MANIFEST = 'manifest.json';
 const MANIFEST_OVR = `manifest-${FLAVOR}.json`;
