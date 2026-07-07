@@ -1,21 +1,26 @@
 import {DB, kInjectionOrder, kResolve, STORAGE_KEY, UCD} from '@/js/consts';
 import {onConnect, onDisconnect} from '@/js/msg';
+import {set} from '@/js/prefs';
 import {styleJSONseemsValid} from '@/js/style-util';
 import {NOP} from '@/js/util';
 import {ignoreChromeError} from '@/js/util-webext';
+import {FIREFOX} from '@/js/ua';
+import {buildCode, buildMeta, configVars} from '../usercss-manager';
 import * as colorScheme from '../color-scheme';
 import {bgInit, onSchemeChange} from '../common';
 import {db, draftsDB, execMirror, prefsDB} from '../db';
 import './init';
-import {buildCode} from '../usercss-manager';
-import {fixKnownProblems} from './fixer';
+import {fixKnownProblems, onSaved} from './fixer';
 import {broadcastStyleUpdated, setOrderImpl, storeInMap, styleMap, stylePreviewMap} from './util';
 
 export const badStyles = [];
 const rxVarsAndImport = /^:root\s*{\s+--[\s\S].*?@import\s/i;
 const hasVarsAndImport = ({code}) => rxVarsAndImport.test(code);
 
-bgInit.push(initStyleMap);
+bgInit.push(async () => {
+  await initStyleMap();
+  await initManagedSettings();
+});
 
 onSchemeChange.add(() => {
   for (const style of styleMap.values()) {
@@ -50,6 +55,52 @@ if (__.MV3) {
       port[kResolve] = resolve;
     }));
   };
+}
+
+async function initManagedSettings() {
+  if (!__.B_FIREFOX || !FIREFOX || typeof browser.storage.managed !== 'object') return;
+  try {
+    const managedSettings = await browser.storage.managed.get(null);
+    if (managedSettings?.prefs) {
+      const managedPrefs = managedSettings.prefs;
+      for (const managedPrefName in managedPrefs) {
+        set(managedPrefName, managedPrefs[managedPrefName]);
+      }
+    }
+    if (managedSettings?.styles) {
+      const managedStyles = managedSettings.styles;
+      for (const managedStyleData of managedStyles) {
+        let newId = 1;
+        const currentStyles = await db.getAll();
+        const takenIds = currentStyles.map(style => style.id);
+        const managedStyle = await buildMeta({sourceCode: managedStyleData.code});
+        for (const style of currentStyles) {
+          if (style.name === managedStyle.name) {
+            newId = style.id;
+            break;
+          }
+          if (!takenIds.includes(style.id + 1)) {
+            newId = style.id + 1;
+            break;
+          }
+        }
+        const styleWithSectionsAndId = {
+          ...managedStyle,
+          sections: await buildCode(managedStyle),
+          id: newId,
+        };
+        const fixedStyle = await fixKnownProblems(styleWithSectionsAndId, true);
+        for (const variable in managedStyleData.variables || {}) {
+          fixedStyle[UCD].vars[variable].value = managedStyleData.variables[variable];
+        }
+        await db.put(fixedStyle);
+        await onSaved(fixedStyle);
+        await configVars(fixedStyle.id, fixedStyle[UCD].vars);
+      }
+    }
+  } catch (err) {
+    console.error(`page.initSettings: ${err}`);
+  }
 }
 
 async function initStyleMap() {
